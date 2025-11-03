@@ -97,8 +97,8 @@ class MainWindow(QMainWindow):
         self.c4_circle = CircleWidget("C4")
         
         # Add circles to grid
-        grid_layout.addWidget(self.c2_circle, 0, 1)
-        grid_layout.addWidget(self.c1_circle, 0, 0)
+        grid_layout.addWidget(self.c2_circle, 0, 0)
+        grid_layout.addWidget(self.c1_circle, 0, 1)
         grid_layout.addWidget(self.c3_circle, 1, 0)
         grid_layout.addWidget(self.c4_circle, 1, 1)
         
