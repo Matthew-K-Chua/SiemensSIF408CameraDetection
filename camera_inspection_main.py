@@ -35,7 +35,7 @@ MODBUS_MAP = {
     # Note: pymodbus uses 0-based addressing internally
     "inspection_id": 127,      # General purpose register 0 (UR address 128)
     "photo_step_done": 128,    # General purpose register 1 (UR address 129)
-    "results_version": 139,    # General purpose register 2 (UR address 130)
+    "results_version": 129,    # General purpose register 2 (UR address 130)
     
     # Boolean values - using general purpose digital outputs (128+)
     # These map to digital outputs in UR
