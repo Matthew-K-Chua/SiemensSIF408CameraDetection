@@ -33,19 +33,19 @@ from inspection_gui import InspectionGUI
 MODBUS_MAP = {
     # Integer values - using general purpose holding registers (start at 128+)
     # Note: pymodbus uses 0-based addressing internally
-    "inspection_id": 0,      # General purpose register 0 (UR address 128)
-    "photo_step_done": 1,    # General purpose register 1 (UR address 129)
-    "results_version": 2,    # General purpose register 2 (UR address 130)
+    "inspection_id": 127,      # General purpose register 0 (UR address 128)
+    "photo_step_done": 128,    # General purpose register 1 (UR address 129)
+    "results_version": 139,    # General purpose register 2 (UR address 130)
     
     # Boolean values - using general purpose digital outputs (128+)
     # These map to digital outputs in UR
-    "c1_recorrect": 3,       # General purpose digital output 0
-    "c2_recorrect": 4,       # General purpose digital output 1
-    "c3_recorrect": 5,       # General purpose digital output 2
-    "c4_recorrect": 6,       # General purpose digital output 3
+    "c1_recorrect": 130,       # General purpose digital output 0
+    "c2_recorrect": 131,       # General purpose digital output 1
+    "c3_recorrect": 132,       # General purpose digital output 2
+    "c4_recorrect": 133,       # General purpose digital output 3
 
-    "mm_received_instruction": 7,  # General purpose digital output 4 (trigger)
-    "photo_ready_step": 8,   # General purpose register 3 (UR address 131)5
+    "mm_received_instruction": 134,  # General purpose digital output 4 (trigger)
+    "photo_ready_step": 135,   # General purpose register 3 (UR address 131)5
 }
 
 
