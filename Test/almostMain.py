@@ -26,7 +26,7 @@ from pymodbus.datastore import (
     ModbusSequentialDataBlock,
 )
 
-logging.basicConfig(level=logging.DEBUG) # connection logging modbus
+#logging.basicConfig(level=logging.DEBUG) # connection logging modbus
 
 
 # Configuration
