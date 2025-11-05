@@ -18,6 +18,7 @@ CONFIGURATION:
 import threading
 import time
 import sys
+from datetime import datetime
 from pymodbus.server import StartTcpServer
 from pymodbus.datastore import (
     ModbusSlaveContext,
@@ -27,7 +28,7 @@ from pymodbus.datastore import (
 
 # Configuration
 GUI_ENABLED = False
-USE_PI_CAMERA = False
+USE_PI_CAMERA = True
 
 # Paths for file-based mode
 IMAGE_FRONT_PATH = r'C:\Users\mattk\Downloads\rightTilt.jpg'
@@ -78,6 +79,9 @@ store = ModbusSlaveContext(
 )
 context = ModbusServerContext(slaves=store, single=True)
 
+SAVE_IMAGES_DIR = '/home/Desktop/mm/SiemensSIF408CameraDetection/Test/imgs $'
+if not os.path.exists(SAVE_IMAGES_DIR):
+    os.makedirs(SAVE_IMAGES_DIR)
 
 def _hr_get(addr: int, count: int = 1):
     """Read from holding registers"""
@@ -119,9 +123,7 @@ def publish_inspection_state(
     _ir_set(C4_RECORRECT_ADDR, [1 if c4 else 0])
     _ir_set(RESULTS_VERSION_ADDR, [results_version])
 
-
-
-def take_photo(view_name):
+def take_photo(view_name, inspection_id):
     """
     Capture photo from camera or return file path.
     Returns path to image.
@@ -130,16 +132,18 @@ def take_photo(view_name):
         print(f"[CAMERA] Capturing {view_name} from Pi camera...")
         camera = Picamera2()
         camera.start()
+        time.sleep(2)  # Let camera warm up
         
-        temp_path = os.path.join(
-            tempfile.gettempdir(), 
-            f'{view_name.lower().replace(" ", "_")}.jpg'
-        )
-        camera.capture_file(temp_path)
+        # Save with timestamp and inspection ID
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'inspection_{inspection_id}_{view_name.lower().replace(" ", "_")}_{timestamp}.jpg'
+        save_path = os.path.join(SAVE_IMAGES_DIR, filename)
+        
+        camera.capture_file(save_path)
         camera.stop()
         
-        print(f"[CAMERA] Saved to: {temp_path}")
-        return temp_path
+        print(f"[CAMERA] Saved to: {save_path}")
+        return save_path
     else:
         if view_name == "First View":
             path = IMAGE_FRONT_PATH
@@ -147,7 +151,6 @@ def take_photo(view_name):
             path = IMAGE_BACK_PATH
         print(f"[CAMERA] Using {view_name} image: {path}")
         return path
-
 
 def process_all_containers(front_image_path, back_image_path):
     """
@@ -179,7 +182,8 @@ def process_all_containers(front_image_path, back_image_path):
             image_path=front_image_path,
             active_canisters=[3, 4],
             crop_regions=CROP_REGIONS_FRONT,
-            camera_side='front'
+            camera_side='front',
+            save_debug=True
         )
         
         # Process back image for C2, C1
@@ -187,7 +191,8 @@ def process_all_containers(front_image_path, back_image_path):
             image_path=back_image_path,
             active_canisters=[2, 1],
             crop_regions=CROP_REGIONS_BACK,
-            camera_side='back'
+            camera_side='back',
+            save_debug=True
         )
         
         # Combine results
@@ -252,7 +257,7 @@ def inspection_loop():
             print("[CAMERA] This photo shows: C3 (left), C4 (right)")
             time.sleep(3.0)
             
-            front_image_path = take_photo("First View")
+            front_image_path = take_photo("First View", inspection_id)
             photo_step_done = 1
             
             publish_inspection_state(
@@ -273,7 +278,7 @@ def inspection_loop():
             print("[CAMERA] This photo shows: C2 (left), C1 (right)")
             time.sleep(3.0)
             
-            back_image_path = take_photo("Second View")
+            back_image_path = take_photo("Second View", inspection_id)
             
             # Process all 4 containers using both images
             print("[CAMERA] Processing all containers...")
