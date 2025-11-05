@@ -33,8 +33,8 @@ scale = 0.3
 right_cropped_small = cv2.resize(right_cropped_img, (int(right_cropped_img.shape[1]*scale), int(right_cropped_img.shape[0]*scale)))
 
 
-cv2.imshow("Cropped", left_cropped_small)
-cv2.imshow("Cropped", right_cropped_small)
+cv2.imshow("Left Cropped", left_cropped_small)
+cv2.imshow("Right Cropped", right_cropped_small)
 
 cv2.waitKey(0)
 cv2.destroyAllWindows()

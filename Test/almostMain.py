@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-Camera Inspection Modbus TCP Server - Two-Stage Processing
+Camera Inspection Modbus TCP Server - Hybrid Version
 
-Follows this workflow:
-1. First view (photo_ready_step=1): Capture photo, process C1+C3
-2. Second view (photo_ready_step=2): Capture photo, process C2+C4, commit all results
+Workflow:
+1. First view (photo_ready_step=1): Capture front photo, wait, mark done
+2. Second view (photo_ready_step=2): Capture back photo, wait
+3. Process all 4 containers using both photos
+4. Commit all results atomically
 
 CONFIGURATION:
     GUI_ENABLED: Set to True for manual GUI inspection, False for automated CV
@@ -23,31 +25,26 @@ from pymodbus.datastore import (
     ModbusSequentialDataBlock,
 )
 
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
-GUI_ENABLED = False      # Set to True to use GUI, False for automated detection
-USE_PI_CAMERA = False    # Set to True to capture from Pi camera
+# Configuration
+GUI_ENABLED = False
+USE_PI_CAMERA = False
 
-# Paths for file-based mode (when USE_PI_CAMERA=False)
+# Paths for file-based mode
 IMAGE_FRONT_PATH = r'C:\Users\mattk\Downloads\rightTilt.jpg'
 IMAGE_BACK_PATH = r'C:\Users\mattk\Downloads\rightTilt.jpg'
 
 # Crop regions for automated detection (optional)
-# Format: {canister_id: [y1, y2, x1, x2], ...}
-CROP_REGIONS_FRONT = None  # None uses defaults - calibrate for your setup
-CROP_REGIONS_BACK = None   # None uses defaults - calibrate for your setup
+CROP_REGIONS_FRONT = None
+CROP_REGIONS_BACK = None
 
-# ============================================================================
-# IMPORTS BASED ON MODE
-# ============================================================================
+# Import based on mode
 if GUI_ENABLED:
     from PySide6.QtWidgets import QApplication
     from inspection_gui import process_containers_gui
-    print("[CONFIG] GUI mode enabled - using manual inspection")
+    print("[CONFIG] GUI mode enabled")
 else:
     from imgDetection import process_containers_automated
-    print("[CONFIG] Automated mode enabled - using CV detection")
+    print("[CONFIG] Automated mode enabled")
 
 if USE_PI_CAMERA:
     try:
@@ -59,38 +56,42 @@ if USE_PI_CAMERA:
         print("[CONFIG] WARNING: picamera2 not found. Set USE_PI_CAMERA=False")
         USE_PI_CAMERA = False
 
-# ---------------------------------------------------------------------------
-# Modbus address map
-# Robot -> server (we READ these from holding registers)
-MM_RECEIVED_INSTRUCTION_ADDR = 120   # robot writes 1 to start new inspection
-PHOTO_READY_STEP_ADDR = 121          # robot writes 1 or 2
+# Robot writes to holding registers
+MM_RECEIVED_INSTRUCTION_ADDR = 135
+PHOTO_READY_STEP_ADDR        = 136
 
-# Server -> robot (we WRITE these to input registers so robot can read)
-INSPECTION_ID_ADDR = 130
-PHOTO_STEP_DONE_ADDR = 131
-RESULTS_VERSION_ADDR = 132
-C1_RECORRECT_ADDR = 133
-C2_RECORRECT_ADDR = 134
-C3_RECORRECT_ADDR = 135
-C4_RECORRECT_ADDR = 136
-# ---------------------------------------------------------------------------
+# Server writes to input registers
+INSPECTION_ID_ADDR           = 128
+PHOTO_STEP_DONE_ADDR         = 129
+RESULTS_VERSION_ADDR         = 130
+C1_RECORRECT_ADDR            = 131
+C2_RECORRECT_ADDR            = 132
+C3_RECORRECT_ADDR            = 133
+C4_RECORRECT_ADDR            = 134
 
-# Create data store with enough space
+# Create data store
 store = ModbusSlaveContext(
-    hr=ModbusSequentialDataBlock(0, [0] * 200),  # holding registers 0..199
-    ir=ModbusSequentialDataBlock(0, [0] * 200),  # input registers 0..199
+    hr=ModbusSequentialDataBlock(0, [0] * 200),
+    ir=ModbusSequentialDataBlock(0, [0] * 200),
     di=ModbusSequentialDataBlock(0, [0] * 200),
     co=ModbusSequentialDataBlock(0, [0] * 200),
 )
 context = ModbusServerContext(slaves=store, single=True)
 
 
-# ---------------------------------------------------------------------------
-# Helpers to read robot-driven values (holding registers, fc=3)
 def _hr_get(addr: int, count: int = 1):
+    """Read from holding registers"""
     slave_id = 0x00
-    return context[slave_id].getValues(4, addr, count=count)
+    return context[slave_id].getValues(3, addr, count=count)
 
+
+def _hr_set(addr: int, values):
+    slave_id = 0x00
+    context[slave_id].setValues(3, addr, values)
+
+def _ir_set(addr: int, values):
+    slave_id = 0x00
+    context[slave_id].setValues(4, addr, values)
 
 def read_mm_received_instruction() -> int:
     return _hr_get(MM_RECEIVED_INSTRUCTION_ADDR, 1)[0]
@@ -98,18 +99,6 @@ def read_mm_received_instruction() -> int:
 
 def read_photo_ready_step() -> int:
     return _hr_get(PHOTO_READY_STEP_ADDR, 1)[0]
-
-
-# ---------------------------------------------------------------------------
-# Helpers to publish to robot (input registers, fc=4)
-def _ir_set(addr: int, values):
-    slave_id = 0x00
-    context[slave_id].setValues(4, addr, values)
-
-def _hr_set(addr: int, values):
-    """Write to holding registers"""
-    slave_id = 0x00
-    context[slave_id].setValues(4, addr, values)
 
 
 def publish_inspection_state(
@@ -121,36 +110,37 @@ def publish_inspection_state(
     c3: bool,
     c4: bool,
 ):
+    """Publish current inspection state to robot via input registers"""
     _ir_set(INSPECTION_ID_ADDR, [inspection_id])
     _ir_set(PHOTO_STEP_DONE_ADDR, [photo_step_done])
-    _ir_set(RESULTS_VERSION_ADDR, [results_version])
     _ir_set(C1_RECORRECT_ADDR, [1 if c1 else 0])
     _ir_set(C2_RECORRECT_ADDR, [1 if c2 else 0])
     _ir_set(C3_RECORRECT_ADDR, [1 if c3 else 0])
     _ir_set(C4_RECORRECT_ADDR, [1 if c4 else 0])
+    _ir_set(RESULTS_VERSION_ADDR, [results_version])
 
 
-# ---------------------------------------------------------------------------
-# Camera Functions
+
 def take_photo(view_name):
     """
-    Capture photo from camera.
-    Returns path to saved image.
+    Capture photo from camera or return file path.
+    Returns path to image.
     """
     if USE_PI_CAMERA:
         print(f"[CAMERA] Capturing {view_name} from Pi camera...")
         camera = Picamera2()
         camera.start()
         
-        # Create temporary file
-        temp_path = os.path.join(tempfile.gettempdir(), f'{view_name.lower().replace(" ", "_")}.jpg')
+        temp_path = os.path.join(
+            tempfile.gettempdir(), 
+            f'{view_name.lower().replace(" ", "_")}.jpg'
+        )
         camera.capture_file(temp_path)
         camera.stop()
         
         print(f"[CAMERA] Saved to: {temp_path}")
         return temp_path
     else:
-        # Use pre-configured file paths
         if view_name == "First View":
             path = IMAGE_FRONT_PATH
         else:
@@ -159,64 +149,80 @@ def take_photo(view_name):
         return path
 
 
-def process_containers_view(active_canisters, view_name, image_path, camera_side):
+def process_all_containers(front_image_path, back_image_path):
     """
-    Process specific containers for one view.
+    Process all 4 containers using both images.
     
     Args:
-        active_canisters: List of canister IDs to process
-        view_name: Display name for this view
-        image_path: Path to captured image
-        camera_side: 'front' or 'back'
+        front_image_path: Path to first view image (shows C3, C4)
+        back_image_path: Path to second view image (shows C2, C1)
     
     Returns:
-        dict: {'c1_recorrect': bool/None, 'c2_recorrect': bool/None, ...}
+        tuple: (c1, c2, c3, c4) as booleans
     """
     if GUI_ENABLED:
-        print(f"[INSPECTION] Launching GUI for {view_name}...")
-        return process_containers_gui(
-            active_containers=active_canisters,
-            view_name=view_name
+        print("[INSPECTION] Launching GUI for all containers...")
+        results = process_containers_gui(
+            active_containers=[1, 2, 3, 4],
+            view_name="All Containers"
         )
+        c1 = results['c1_recorrect'] if results['c1_recorrect'] is not None else False
+        c2 = results['c2_recorrect'] if results['c2_recorrect'] is not None else False
+        c3 = results['c3_recorrect'] if results['c3_recorrect'] is not None else False
+        c4 = results['c4_recorrect'] if results['c4_recorrect'] is not None else False
+        return c1, c2, c3, c4
     else:
-        print(f"[INSPECTION] Running automated detection for {view_name}...")
-        crop_regions = CROP_REGIONS_FRONT if camera_side == 'front' else CROP_REGIONS_BACK
-        return process_containers_automated(
-            image_path=image_path,
-            active_canisters=active_canisters,
-            crop_regions=crop_regions,
-            camera_side=camera_side
+        print("[INSPECTION] Running automated detection...")
+        
+        # Process front image for C3, C4
+        front_results = process_containers_automated(
+            image_path=front_image_path,
+            active_canisters=[3, 4],
+            crop_regions=CROP_REGIONS_FRONT,
+            camera_side='front'
         )
+        
+        # Process back image for C2, C1
+        back_results = process_containers_automated(
+            image_path=back_image_path,
+            active_canisters=[2, 1],
+            crop_regions=CROP_REGIONS_BACK,
+            camera_side='back'
+        )
+        
+        # Combine results
+        c1 = back_results['c1_recorrect'] if back_results['c1_recorrect'] is not None else False
+        c2 = back_results['c2_recorrect'] if back_results['c2_recorrect'] is not None else False
+        c3 = front_results['c3_recorrect'] if front_results['c3_recorrect'] is not None else False
+        c4 = front_results['c4_recorrect'] if front_results['c4_recorrect'] is not None else False
+        
+        return c1, c2, c3, c4
 
 
-# ---------------------------------------------------------------------------
 def inspection_loop():
     """
-    Main inspection loop following the two-stage pseudocode.
-    
-    Stage 1: photo_ready_step=1 → Process C1, C3
-    Stage 2: photo_ready_step=2 → Process C2, C4 → Commit all results atomically
+    Main inspection loop:
+    - First view: Capture front photo, wait, mark done
+    - Second view: Capture back photo, wait, process all containers, commit
     """
     inspection_id = 0
-    photo_step_done = 0   # 0 none, 1 first view, 2 second view
+    photo_step_done = 0
     results_version = 0
-    
-    # Published correction flags
     c1_recorrect = False
     c2_recorrect = False
     c3_recorrect = False
     c4_recorrect = False
     
-    # Temporary storage for first view results (not published yet)
-    temp_c1 = False
-    temp_c3 = False
+    # Store image paths between views
+    front_image_path = None
+    back_image_path = None
 
-    print("[CAMERA] Inspection loop started.")
+    print("[CAMERA] Inspection loop started")
     print(f"[CAMERA] Mode: {'GUI' if GUI_ENABLED else 'Automated CV'}")
     print(f"[CAMERA] Camera: {'Pi Camera' if USE_PI_CAMERA else 'File-based'}")
 
     while True:
-        # ---- CONTINUOUS PUBLISH ----
+        # Continuous publish
         publish_inspection_state(
             inspection_id,
             photo_step_done,
@@ -227,49 +233,28 @@ def inspection_loop():
             c4_recorrect,
         )
 
-        # Print current register values
-        mm_rcvd = read_mm_received_instruction()
-        photo_step = read_photo_ready_step()
-        print(f"[DEBUG] mm_received_instruction={mm_rcvd}, photo_ready_step={photo_step}")
-
-        # ---- START NEW INSPECTION ----
+        # Start new inspection
         if read_mm_received_instruction() == 1:
             inspection_id += 1
             photo_step_done = 0
-            # Keep previous cX_recorrect values published until new commit
-            print(f"\n[CAMERA] ═══════════════════════════════════════")
-            print(f"[CAMERA] New inspection requested. ID = {inspection_id}")
-            print(f"[CAMERA] ═══════════════════════════════════════\n")
-
-            # Clear the trigger
-            _hr_set(MM_RECEIVED_INSTRUCTION_ADDR, [0])
-
-        # ---- FIRST VIEW: Process C1, C3 ----
+            front_image_path = None
+            back_image_path = None
+            print(f"\n[CAMERA] New inspection requested. ID = {inspection_id}\n")
+            
+            # Clear trigger
+            _ir_set(MM_RECEIVED_INSTRUCTION_ADDR, [0])
+            # _hr_set(MM_RECEIVED_INSTRUCTION_ADDR, [0]) # Apparently this is better but commented for now
+            
+        # First view: Capture front photo
         photo_ready_step = read_photo_ready_step()
         if photo_ready_step == 1 and photo_step_done == 0:
-            print("[CAMERA] ─── FIRST VIEW ───")
+            print("[CAMERA] First view ready, capturing front photo...")
+            print("[CAMERA] This photo shows: C3 (left), C4 (right)")
+            time.sleep(3.0)
             
-            # Take photo
-            photo_path = take_photo("First View")
-            
-            # Process C1 and C3
-            results = process_containers_view(
-                active_canisters=[1, 3],
-                view_name="First View (C1, C3)",
-                image_path=photo_path,
-                camera_side='front'
-            )
-            
-            # Store results temporarily (don't commit yet)
-            temp_c1 = results['c1_recorrect'] if results['c1_recorrect'] is not None else False
-            temp_c3 = results['c3_recorrect'] if results['c3_recorrect'] is not None else False
-            
-            print(f"[CAMERA] First view complete: C1={temp_c1}, C3={temp_c3} (stored, not committed)")
-            
-            # Mark first view done
+            front_image_path = take_photo("First View")
             photo_step_done = 1
             
-            # Publish updated photo_step_done (but not results yet)
             publish_inspection_state(
                 inspection_id,
                 photo_step_done,
@@ -279,41 +264,28 @@ def inspection_loop():
                 c3_recorrect,
                 c4_recorrect,
             )
+            print("[CAMERA] First view complete")
 
-        # ---- SECOND VIEW: Process C2, C4 + ATOMIC COMMIT ----
-        photo_ready_step = read_photo_ready_step()  # re-read in case it changed
+        # Second view: Capture back photo, process all, commit
+        photo_ready_step = read_photo_ready_step()
         if photo_ready_step == 2 and photo_step_done == 1:
-            print("[CAMERA] ─── SECOND VIEW ───")
+            print("[CAMERA] Second view ready, capturing back photo...")
+            print("[CAMERA] This photo shows: C2 (left), C1 (right)")
+            time.sleep(3.0)
             
-            # Take photo
-            photo_path = take_photo("Second View")
+            back_image_path = take_photo("Second View")
             
-            # Process C2 and C4
-            results = process_containers_view(
-                active_canisters=[2, 4],
-                view_name="Second View (C2, C4)",
-                image_path=photo_path,
-                camera_side='back'
+            # Process all 4 containers using both images
+            print("[CAMERA] Processing all containers...")
+            c1_recorrect, c2_recorrect, c3_recorrect, c4_recorrect = process_all_containers(
+                front_image_path, 
+                back_image_path
             )
             
-            # Get C2, C4 results
-            new_c2 = results['c2_recorrect'] if results['c2_recorrect'] is not None else False
-            new_c4 = results['c4_recorrect'] if results['c4_recorrect'] is not None else False
-            
-            print(f"[CAMERA] Second view complete: C2={new_c2}, C4={new_c4}")
-            
-            # ---- ATOMIC COMMIT: Combine all results ----
-            # Use stored values from first view + new values from second view
-            c1_recorrect = temp_c1
-            c2_recorrect = new_c2
-            c3_recorrect = temp_c3
-            c4_recorrect = new_c4
-            
-            # Bump version to signal commit
-            results_version += 1
+            # Atomic commit
             photo_step_done = 2
+            results_version += 1
             
-            # Publish everything atomically
             publish_inspection_state(
                 inspection_id,
                 photo_step_done,
@@ -324,42 +296,34 @@ def inspection_loop():
                 c4_recorrect,
             )
             
-            print(f"\n[CAMERA] ✓ Results COMMITTED (version {results_version}):")
-            print(f"[CAMERA]     C1 := {c1_recorrect}")
-            print(f"[CAMERA]     C2 := {c2_recorrect}")
-            print(f"[CAMERA]     C3 := {c3_recorrect}")
-            print(f"[CAMERA]     C4 := {c4_recorrect}")
-            print(f"[CAMERA] ═══════════════════════════════════════\n")
+            print(f"\n[CAMERA] Results committed (version {results_version}):")
+            print(f"[CAMERA]   C1={c1_recorrect}, C2={c2_recorrect}")
+            print(f"[CAMERA]   C3={c3_recorrect}, C4={c4_recorrect}\n")
 
-        # 10 Hz publish rate
+        # 10 Hz
         time.sleep(0.1)
 
 
-# ---------------------------------------------------------------------------
 def run_modbus_server():
-    """Run the Modbus TCP server (blocking)"""
+    """Run Modbus TCP server (blocking)"""
     print("[MODBUS] Starting server on port 502")
     StartTcpServer(context=context, address=("0.0.0.0", 502))
 
 
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     if GUI_ENABLED:
-        # GUI mode: Need Qt event loop in main thread
+        # GUI mode: Qt event loop in main thread
         app = QApplication(sys.argv)
         
-        # Start Modbus in a thread
         modbus_thread = threading.Thread(target=run_modbus_server, daemon=True)
         modbus_thread.start()
         
-        # Start inspection loop in a thread
         logic_thread = threading.Thread(target=inspection_loop, daemon=True)
         logic_thread.start()
         
-        print("[MAIN] GUI mode: Running Qt event loop in main thread")
+        print("[MAIN] GUI mode: Running Qt event loop")
         print("[MAIN] Press Ctrl+C to exit")
         
-        # Run Qt event loop in main thread
         try:
             sys.exit(app.exec())
         except KeyboardInterrupt:
@@ -371,10 +335,9 @@ if __name__ == "__main__":
         logic_thread = threading.Thread(target=inspection_loop, daemon=True)
         logic_thread.start()
         
-        print("[MAIN] Automated mode: Running Modbus server in main thread")
+        print("[MAIN] Automated mode: Running Modbus server")
         print("[MAIN] Press Ctrl+C to exit")
         
-        # Start Modbus TCP server (blocks main thread)
         try:
             run_modbus_server()
         except KeyboardInterrupt:
