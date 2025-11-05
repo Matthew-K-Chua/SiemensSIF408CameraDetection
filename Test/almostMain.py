@@ -14,7 +14,7 @@ CONFIGURATION:
     IMAGE_FRONT_PATH: Path to front camera image (if USE_PI_CAMERA=False)
     IMAGE_BACK_PATH: Path to back camera image (if USE_PI_CAMERA=False)
 """
-
+import logging
 import threading
 import time
 import sys
@@ -25,6 +25,9 @@ from pymodbus.datastore import (
     ModbusServerContext,
     ModbusSequentialDataBlock,
 )
+
+logging.basicConfig(level=logging.DEBUG) # connection logging modbus
+
 
 # Configuration
 GUI_ENABLED = False
@@ -79,7 +82,7 @@ store = ModbusSlaveContext(
 )
 context = ModbusServerContext(slaves=store, single=True)
 
-SAVE_IMAGES_DIR = '/home/Desktop/mm/SiemensSIF408CameraDetection/Test/imgs $'
+SAVE_IMAGES_DIR = '/home/admin/Desktop/mm/SiemensSIF408CameraDetection/Test/imgs'
 if not os.path.exists(SAVE_IMAGES_DIR):
     os.makedirs(SAVE_IMAGES_DIR)
 
@@ -123,34 +126,42 @@ def publish_inspection_state(
     _ir_set(C4_RECORRECT_ADDR, [1 if c4 else 0])
     _ir_set(RESULTS_VERSION_ADDR, [results_version])
 
-def take_photo(view_name, inspection_id):
+def take_photo_async(view_name, inspection_id):
     """
-    Capture photo from camera or return file path.
-    Returns path to image.
+    Capture photo in separate thread to avoid blocking Modbus loop.
+    Returns future-like object.
     """
-    if USE_PI_CAMERA:
-        print(f"[CAMERA] Capturing {view_name} from Pi camera...")
-        camera = Picamera2()
-        camera.start()
-        time.sleep(2)  # Let camera warm up
-        
-        # Save with timestamp and inspection ID
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f'inspection_{inspection_id}_{view_name.lower().replace(" ", "_")}_{timestamp}.jpg'
-        save_path = os.path.join(SAVE_IMAGES_DIR, filename)
-        
-        camera.capture_file(save_path)
-        camera.stop()
-        
-        print(f"[CAMERA] Saved to: {save_path}")
-        return save_path
-    else:
-        if view_name == "First View":
-            path = IMAGE_FRONT_PATH
+    result = {'path': None, 'done': False}
+    
+    def capture():
+        if USE_PI_CAMERA:
+            print(f"[CAMERA] Capturing {view_name} from Pi camera...")
+            camera = Picamera2()
+            camera.start()
+            time.sleep(2)
+            
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f'inspection_{inspection_id}_{view_name.lower().replace(" ", "_")}_{timestamp}.jpg'
+            
+            # Fix the path construction
+            save_dir = os.path.join(os.path.dirname(__file__), 'imgs')
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir)
+            
+            save_path = os.path.join(save_dir, filename)
+            camera.capture_file(save_path)
+            camera.stop()
+            
+            print(f"[CAMERA] Saved to: {save_path}")
+            result['path'] = save_path
         else:
-            path = IMAGE_BACK_PATH
-        print(f"[CAMERA] Using {view_name} image: {path}")
-        return path
+            result['path'] = IMAGE_FRONT_PATH if view_name == "First View" else IMAGE_BACK_PATH
+        
+        result['done'] = True
+    
+    thread = threading.Thread(target=capture, daemon=True)
+    thread.start()
+    return result
 
 def process_all_containers(front_image_path, back_image_path):
     """
@@ -206,9 +217,7 @@ def process_all_containers(front_image_path, back_image_path):
 
 def inspection_loop():
     """
-    Main inspection loop:
-    - First view: Capture front photo, wait, mark done
-    - Second view: Capture back photo, wait, process all containers, commit
+    Main inspection loop with non-blocking camera capture.
     """
     inspection_id = 0
     photo_step_done = 0
@@ -218,16 +227,18 @@ def inspection_loop():
     c3_recorrect = False
     c4_recorrect = False
     
-    # Store image paths between views
+    # Store image paths and capture states
     front_image_path = None
     back_image_path = None
+    front_capture = None  # Will hold the async result
+    back_capture = None
 
     print("[CAMERA] Inspection loop started")
     print(f"[CAMERA] Mode: {'GUI' if GUI_ENABLED else 'Automated CV'}")
     print(f"[CAMERA] Camera: {'Pi Camera' if USE_PI_CAMERA else 'File-based'}")
 
     while True:
-        # Continuous publish
+        # Continuous publish at 10Hz - this keeps Modbus alive
         publish_inspection_state(
             inspection_id,
             photo_step_done,
@@ -244,20 +255,26 @@ def inspection_loop():
             photo_step_done = 0
             front_image_path = None
             back_image_path = None
+            front_capture = None
+            back_capture = None
             print(f"\n[CAMERA] New inspection requested. ID = {inspection_id}\n")
             
             # Clear trigger
             _ir_set(MM_RECEIVED_INSTRUCTION_ADDR, [0])
-            # _hr_set(MM_RECEIVED_INSTRUCTION_ADDR, [0]) # Apparently this is better but commented for now
             
-        # First view: Capture front photo
+        # First view: Start capturing front photo
         photo_ready_step = read_photo_ready_step()
-        if photo_ready_step == 1 and photo_step_done == 0:
-            print("[CAMERA] First view ready, capturing front photo...")
+        if photo_ready_step == 1 and photo_step_done == 0 and front_capture is None:
+            print("[CAMERA] First view ready, starting front photo capture...")
             print("[CAMERA] This photo shows: C3 (left), C4 (right)")
             time.sleep(3.0)
             
-            front_image_path = take_photo("First View", inspection_id)
+            # Start async capture
+            front_capture = take_photo_async("First View", inspection_id)
+        
+        # Check if front capture is complete
+        if front_capture is not None and front_capture['done'] and photo_step_done == 0:
+            front_image_path = front_capture['path']
             photo_step_done = 1
             
             publish_inspection_state(
@@ -271,14 +288,19 @@ def inspection_loop():
             )
             print("[CAMERA] First view complete")
 
-        # Second view: Capture back photo, process all, commit
+        # Second view: Start capturing back photo
         photo_ready_step = read_photo_ready_step()
-        if photo_ready_step == 2 and photo_step_done == 1:
-            print("[CAMERA] Second view ready, capturing back photo...")
+        if photo_ready_step == 2 and photo_step_done == 1 and back_capture is None:
+            print("[CAMERA] Second view ready, starting back photo capture...")
             print("[CAMERA] This photo shows: C2 (left), C1 (right)")
             time.sleep(3.0)
             
-            back_image_path = take_photo("Second View", inspection_id)
+            # Start async capture
+            back_capture = take_photo_async("Second View", inspection_id)
+        
+        # Check if back capture is complete, then process
+        if back_capture is not None and back_capture['done'] and photo_step_done == 1:
+            back_image_path = back_capture['path']
             
             # Process all 4 containers using both images
             print("[CAMERA] Processing all containers...")
@@ -304,10 +326,12 @@ def inspection_loop():
             print(f"\n[CAMERA] Results committed (version {results_version}):")
             print(f"[CAMERA]   C1={c1_recorrect}, C2={c2_recorrect}")
             print(f"[CAMERA]   C3={c3_recorrect}, C4={c4_recorrect}\n")
+            
+            # Reset for next inspection
+            back_capture = None
 
-        # 10 Hz
+        # 10 Hz loop rate
         time.sleep(0.1)
-
 
 def run_modbus_server():
     """Run Modbus TCP server (blocking)"""
