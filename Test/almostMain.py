@@ -89,7 +89,7 @@ context = ModbusServerContext(slaves=store, single=True)
 # Helpers to read robot-driven values (holding registers, fc=3)
 def _hr_get(addr: int, count: int = 1):
     slave_id = 0x00
-    return context[slave_id].getValues(3, addr, count=count)
+    return context[slave_id].getValues(4, addr, count=count)
 
 
 def read_mm_received_instruction() -> int:
@@ -103,6 +103,11 @@ def read_photo_ready_step() -> int:
 # ---------------------------------------------------------------------------
 # Helpers to publish to robot (input registers, fc=4)
 def _ir_set(addr: int, values):
+    slave_id = 0x00
+    context[slave_id].setValues(4, addr, values)
+
+def _hr_set(addr: int, values):
+    """Write to holding registers"""
     slave_id = 0x00
     context[slave_id].setValues(4, addr, values)
 
@@ -222,6 +227,11 @@ def inspection_loop():
             c4_recorrect,
         )
 
+        # Print current register values
+        mm_rcvd = read_mm_received_instruction()
+        photo_step = read_photo_ready_step()
+        print(f"[DEBUG] mm_received_instruction={mm_rcvd}, photo_ready_step={photo_step}")
+
         # ---- START NEW INSPECTION ----
         if read_mm_received_instruction() == 1:
             inspection_id += 1
@@ -232,7 +242,7 @@ def inspection_loop():
             print(f"[CAMERA] ═══════════════════════════════════════\n")
 
             # Clear the trigger
-            _ir_set(MM_RECEIVED_INSTRUCTION_ADDR, [0])
+            _hr_set(MM_RECEIVED_INSTRUCTION_ADDR, [0])
 
         # ---- FIRST VIEW: Process C1, C3 ----
         photo_ready_step = read_photo_ready_step()
