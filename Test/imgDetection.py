@@ -1,5 +1,7 @@
 import cv2
 import numpy as np
+import os
+
 
 def detect_canister_level(canister_img, canister_id, angle_tolerance=2.0, save_debug=False, debug_path=None):
     """
@@ -23,8 +25,8 @@ def detect_canister_level(canister_img, canister_id, angle_tolerance=2.0, save_d
         'is_curved': False
     }
     
-    gray_image = cv2.cvtColor(canister_img, cv2.COLOR_BGR2GRAY)
-    blur_image = cv2.medianBlur(gray_image, 11)
+    grey_image = cv2.cvtColor(canister_img, cv2.COLOR_BGR2GRAY)
+    blur_image = cv2.medianBlur(grey_image, 11)
     canny_image = cv2.Canny(blur_image, 300, 400)
     
     lines = cv2.HoughLinesP(
@@ -46,7 +48,7 @@ def detect_canister_level(canister_img, canister_id, angle_tolerance=2.0, save_d
     
     for line in lines:
         x1, y1, x2, y2 = line[0]
-        cv2.line(debug_img, (x1, y1), (x2, y2), (0, 0, 255), 2)  # Thicker for visibility
+        cv2.line(debug_img, (x1, y1), (x2, y2), (0, 0, 255), 2)
         
         dx = x2 - x1
         dy = y2 - y1
@@ -141,6 +143,7 @@ def process_pallet(image, active_canisters, crop_regions=None, camera_side='fron
     
     return canister_status
 
+
 def get_recorrection_flags_from_dict(canister_status):
     """
     Convert canister status dict to recorrection flags.
@@ -212,6 +215,7 @@ def process_containers_automated(image_path, active_canisters, crop_regions=None
     print("\n")
     
     return result
+
 
 # Main execution for standalone testing
 if __name__ == "__main__":
