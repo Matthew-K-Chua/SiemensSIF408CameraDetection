@@ -344,10 +344,20 @@ def get_recorrection_flags_from_dict(canister_status):
 
 def process_containers_automated(image_path, active_canisters,
                                  crop_regions=None, camera_side='front',
-                                 save_debug=False):
+                                 save_debug=False, debug_dir=None):
     """
     Automated container inspection for specific canisters.
-    Returns: {'c1_recorrect': bool/None, ...}
+
+    Args:
+        image_path: Path to camera image
+        active_canisters: List of canister IDs to process
+        crop_regions: Optional custom crop regions
+        camera_side: 'front' or 'back'
+        save_debug: Whether to save debug images with line detection
+        debug_dir: Optional directory to save debug images (crops + lines)
+
+    Returns:
+        dict: {'c1_recorrect': bool/None, ...}
     """
     canister_str = ", ".join([f"C{i}" for i in sorted(active_canisters)])
     print(f"\n[AUTO DETECT] Processing canisters: {canister_str}")
@@ -364,14 +374,20 @@ def process_containers_automated(image_path, active_canisters,
             'c4_recorrect': None,
         }
 
-    debug_dir = os.path.dirname(image_path) if save_debug else None
+    # Decide where to save debug images
+    if save_debug:
+        if debug_dir is None:
+            # fall back to same folder as image
+            debug_dir = os.path.dirname(image_path) or "."
+    else:
+        debug_dir = None
 
     canister_status = process_pallet(
         image,
         active_canisters,
         crop_regions=crop_regions,
         camera_side=camera_side,
-        debug_dir=debug_dir
+        debug_dir=debug_dir,
     )
 
     result = get_recorrection_flags_from_dict(canister_status)
