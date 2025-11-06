@@ -12,8 +12,8 @@ height, width = image.shape[:2]
 
 # Define left crop region (red box area in your example)
 # y: vertical, x: horizontal
-left_y1, left_y2 = int(height * 0.35), int(height * 0.55)   # middle vertical band
-left_x1, left_x2 = int(width * 0.20), int(width * 0.50)     # center horizontally
+left_y1, left_y2 = int(height * 0.30), int(height * 0.55)   # middle vertical band
+left_x1, left_x2 = int(width * 0.24), int(width * 0.50)     # center horizontally
 
 left_cropped_img = image[left_y1:left_y2, left_x1:left_x2]
 
@@ -23,8 +23,8 @@ left_cropped_small = cv2.resize(left_cropped_img, (int(left_cropped_img.shape[1]
 
 # Define right crop region (red box area in your example)
 # y: vertical, x: horizontal
-right_y1, right_y2 = int(height * 0.40), int(height * 0.55)   # middle vertical band
-right_x1, right_x2 = int(width * 0.60), int(width * 0.90)     # center horizontally
+right_y1, right_y2 = int(height * 0.30), int(height * 0.55)   # middle vertical band
+right_x1, right_x2 = int(width * 0.60), int(width * 0.85)     # center horizontally
 
 right_cropped_img = image[right_y1:right_y2, right_x1:right_x2]
 

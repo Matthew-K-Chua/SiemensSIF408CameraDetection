@@ -252,12 +252,12 @@ def process_pallet(image, active_canisters, crop_regions=None,
     # Default crop regions if none passed
     if crop_regions is None:
         # Vertical band for all crops (middle section)
-        y1 = int(height * 0.40)
+        y1 = int(height * 0.30)
         y2 = int(height * 0.55)
 
         # Horizontal positions
-        left_x1, left_x2 = int(width * 0.20), int(width * 0.50)
-        right_x1, right_x2 = int(width * 0.60), int(width * 0.90)
+        left_x1, left_x2 = int(width * 0.24), int(width * 0.50)
+        right_x1, right_x2 = int(width * 0.60), int(width * 0.85)
 
         if camera_side == 'front':
             # Front view shows: C3 (left), C4 (right)
@@ -278,6 +278,10 @@ def process_pallet(image, active_canisters, crop_regions=None,
     if debug_dir:
         os.makedirs(debug_dir, exist_ok=True)
 
+    # NEW: Create full-image visualisations
+    full_img_with_crops = image.copy()
+    full_img_with_lines = image.copy()
+
     for canister_id in active_canisters:
         if canister_id not in crop_regions:
             print(f"[AUTO DETECT] Warning: No crop region defined for canister {canister_id}")
@@ -285,6 +289,14 @@ def process_pallet(image, active_canisters, crop_regions=None,
 
         y1, y2, x1, x2 = crop_regions[canister_id]
         canister_crop = image[y1:y2, x1:x2]
+
+        # NEW: Draw crop region rectangle on full image
+        if debug_dir:
+            cv2.rectangle(full_img_with_crops, (x1, y1), (x2, y2), (0, 255, 0), 3)
+            # Add label
+            label = f"C{canister_id}"
+            cv2.putText(full_img_with_crops, label, (x1, y1 - 10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 3)
 
         # Prepare debug paths
         crop_path = None
@@ -307,6 +319,40 @@ def process_pallet(image, active_canisters, crop_regions=None,
         )
         canister_status[canister_id] = status
 
+        # NEW: Detect lines again and draw them on the full image
+        if debug_dir and status['has_top_line']:
+            grey_crop = cv2.cvtColor(canister_crop, cv2.COLOR_BGR2GRAY)
+            blur_crop = cv2.medianBlur(grey_crop, 11)
+            canny_crop = cv2.Canny(blur_crop, 300, 400)
+            
+            lines = cv2.HoughLinesP(
+                canny_crop,
+                rho=1,
+                theta=np.pi / 180,
+                threshold=30,
+                minLineLength=40,
+                maxLineGap=5
+            )
+            
+            if lines is not None:
+                for line in lines:
+                    lx1, ly1, lx2, ly2 = line[0]
+                    # Transform coordinates from crop space to full image space
+                    full_x1 = lx1 + x1
+                    full_y1 = ly1 + y1
+                    full_x2 = lx2 + x1
+                    full_y2 = ly2 + y1
+                    
+                    # Draw line on full image
+                    cv2.line(full_img_with_lines, (full_x1, full_y1), 
+                            (full_x2, full_y2), (0, 0, 255), 2)
+            
+            # Also draw the crop rectangle on the lines image
+            cv2.rectangle(full_img_with_lines, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            label = f"C{canister_id}"
+            cv2.putText(full_img_with_lines, label, (x1, y1 - 10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 2)
+
         level_str = "LEVEL" if status['is_level'] else "OFF KILTER"
         if status['has_top_line']:
             if status['is_curved']:
@@ -316,8 +362,18 @@ def process_pallet(image, active_canisters, crop_regions=None,
         else:
             print(f"[AUTO DETECT] Canister {canister_id}: No top line detected - assuming LEVEL")
 
-    return canister_status
+    # NEW: Save the full-image visualisations
+    if debug_dir:
+        crop_viz_path = os.path.join(debug_dir, "full_image_with_crops.jpg")
+        lines_viz_path = os.path.join(debug_dir, "full_image_with_lines.jpg")
+        
+        cv2.imwrite(crop_viz_path, full_img_with_crops)
+        cv2.imwrite(lines_viz_path, full_img_with_lines)
+        
+        print(f"[AUTO DETECT] Saved full image with crop regions: {crop_viz_path}")
+        print(f"[AUTO DETECT] Saved full image with detected lines: {lines_viz_path}")
 
+    return canister_status
 
 def get_recorrection_flags_from_dict(canister_status):
     """
