@@ -488,7 +488,7 @@ def process_two_views(front_path: str, back_path: str):
     # Process back view (C1, C2)
     flags_back = process_containers_automated(
         back_path,
-        active_canisters=[2, 1],
+        active_canisters=[1, 2],
         camera_side='back',
         save_debug=True,
         debug_dir=back_debug_dir,

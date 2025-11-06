@@ -32,8 +32,11 @@ def detect_canister_level(canister_img, canister_id, angle_tolerance=2.0, show_d
     print(f"  Using minLineLength={min_line_length}, threshold={hough_threshold}")
 
     grey_image = cv2.cvtColor(canister_img, cv2.COLOR_BGR2GRAY)
-    blur_image = cv2.medianBlur(grey_image, 1)
-    canny_image = cv2.Canny(blur_image, 30, 150)
+    # blur_image = cv2.medianBlur(grey_image, 1)
+    blur_image = cv2.GaussianBlur(grey_image, (5, 5), 0)
+    _, binary_image = cv2.threshold(blur_image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # canny_image = cv2.Canny(blur_image, 30, 150)
+    canny_image = cv2.Canny(binary_image, 30, 150) # Keep your Canny params for now
 
     # Show intermediate steps if debugging
     if show_debug:
@@ -89,9 +92,9 @@ def detect_canister_level(canister_img, canister_id, angle_tolerance=2.0, show_d
         # Lots of variation → likely curved
         status['is_curved'] = True
         status['is_level'] = False
-        status['angle'] = float(np.mean(horizontal_angles))
+        status['angle'] = float(np.median(horizontal_angles))
     else:
-        avg_angle = float(np.mean(horizontal_angles))
+        avg_angle = float(np.median(horizontal_angles))
         status['angle'] = avg_angle
         status['is_level'] = abs(avg_angle) < angle_tolerance
 
