@@ -255,7 +255,7 @@ def process_pallet(image, active_canisters, crop_regions=None,
         y1 = int(height * 0.42)
         y2 = int(height * 0.55)
 
-        # Horizontal positions (same as your working script)
+        # Horizontal positions
         left_x1, left_x2 = int(width * 0.35), int(width * 0.51)
         right_x1, right_x2 = int(width * 0.55), int(width * 0.71)
 
@@ -385,21 +385,7 @@ def process_containers_automated(image_path, active_canisters,
     return result
 
 def process_two_views(front_path: str, back_path: str):
-    """
-    Run CV on front & back images and return dict:
-        {'c1': 0/1, 'c2': 0/1, 'c3': 0/1, 'c4': 0/1}
-
-    Here we interpret:
-      1 = needs recorrection (NOT level)
-      0 = OK (level) or not processed
-
-    Also creates a timestamped debug directory and saves:
-      - canister_X_crop.jpg
-      - canister_X_lines.jpg
-    for both front and back views.
-    """
-
-    # Base directory derived from front image location
+    ...
     base_dir = os.path.dirname(front_path) or "."
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     debug_root = os.path.join(base_dir, f"debug_{ts}")
@@ -412,39 +398,22 @@ def process_two_views(front_path: str, back_path: str):
 
     print(f"[AUTO DETECT] Debug output directory: {debug_root}")
 
-    # Front camera sees: C3 (left), C4 (right)
     flags_front = process_containers_automated(
         front_path,
         active_canisters=[3, 4],
         camera_side='front',
         save_debug=True,
-        debug_dir=front_debug_dir
+        debug_dir=front_debug_dir,
     )
 
-    # Back camera sees: C1 (left), C2 (right)
     flags_back = process_containers_automated(
         back_path,
         active_canisters=[1, 2],
         camera_side='back',
         save_debug=True,
-        debug_dir=back_debug_dir
+        debug_dir=back_debug_dir,
     )
-
-    combined = {**flags_front, **flags_back}
-
-    # Convert booleans/None into 0/1 ints for Modbus
-    out = {}
-    for cid in (1, 2, 3, 4):
-        key = f'c{cid}_recorrect'
-        val = combined.get(key)
-        if val is None:
-            # Not processed → treat as OK
-            out[f'c{cid}'] = 0
-        else:
-            out[f'c{cid}'] = 1 if val else 0
-
-    print(f"[AUTO DETECT] Final recorrection flags (c1..c4): {out}")
-    return out
+    ...
 
 # --------------------------- Logic loop --------------------------------------
 
