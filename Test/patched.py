@@ -384,7 +384,6 @@ def process_containers_automated(image_path, active_canisters,
 
     return result
 
-
 def process_two_views(front_path: str, back_path: str):
     """
     Run CV on front & back images and return dict:
@@ -393,14 +392,33 @@ def process_two_views(front_path: str, back_path: str):
     Here we interpret:
       1 = needs recorrection (NOT level)
       0 = OK (level) or not processed
+
+    Also creates a timestamped debug directory and saves:
+      - canister_X_crop.jpg
+      - canister_X_lines.jpg
+    for both front and back views.
     """
+
+    # Base directory derived from front image location
+    base_dir = os.path.dirname(front_path) or "."
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    debug_root = os.path.join(base_dir, f"debug_{ts}")
+
+    front_debug_dir = os.path.join(debug_root, "front")
+    back_debug_dir  = os.path.join(debug_root, "back")
+
+    os.makedirs(front_debug_dir, exist_ok=True)
+    os.makedirs(back_debug_dir, exist_ok=True)
+
+    print(f"[AUTO DETECT] Debug output directory: {debug_root}")
 
     # Front camera sees: C3 (left), C4 (right)
     flags_front = process_containers_automated(
         front_path,
         active_canisters=[3, 4],
         camera_side='front',
-        save_debug=False  # set True if you want line overlay images
+        save_debug=True,
+        debug_dir=front_debug_dir
     )
 
     # Back camera sees: C1 (left), C2 (right)
@@ -408,7 +426,8 @@ def process_two_views(front_path: str, back_path: str):
         back_path,
         active_canisters=[1, 2],
         camera_side='back',
-        save_debug=False
+        save_debug=True,
+        debug_dir=back_debug_dir
     )
 
     combined = {**flags_front, **flags_back}
@@ -426,7 +445,6 @@ def process_two_views(front_path: str, back_path: str):
 
     print(f"[AUTO DETECT] Final recorrection flags (c1..c4): {out}")
     return out
-
 
 # --------------------------- Logic loop --------------------------------------
 
