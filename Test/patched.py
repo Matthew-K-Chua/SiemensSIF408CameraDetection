@@ -181,7 +181,7 @@ def detect_canister_level(canister_img, canister_id, angle_tolerance=2.0,
 
     grey_image = cv2.cvtColor(canister_img, cv2.COLOR_BGR2GRAY)
     blur_image = cv2.medianBlur(grey_image, 11)
-    canny_image = cv2.Canny(blur_image, 300, 400)
+    canny_image = cv2.Canny(blur_image, 30, 100)
 
     lines = cv2.HoughLinesP(
         canny_image,
@@ -488,7 +488,7 @@ def process_two_views(front_path: str, back_path: str):
     # Process back view (C1, C2)
     flags_back = process_containers_automated(
         back_path,
-        active_canisters=[1, 2],
+        active_canisters=[2, 1],
         camera_side='back',
         save_debug=True,
         debug_dir=back_debug_dir,
