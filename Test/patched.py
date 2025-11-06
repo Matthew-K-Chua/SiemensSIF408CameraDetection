@@ -323,7 +323,7 @@ def process_pallet(image, active_canisters, crop_regions=None,
         if debug_dir and status['has_top_line']:
             grey_crop = cv2.cvtColor(canister_crop, cv2.COLOR_BGR2GRAY)
             blur_crop = cv2.medianBlur(grey_crop, 11)
-            canny_crop = cv2.Canny(blur_crop, 300, 400)
+            canny_crop = cv2.Canny(blur_crop, 30, 100)
             
             lines = cv2.HoughLinesP(
                 canny_crop,
