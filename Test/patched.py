@@ -401,7 +401,13 @@ def process_containers_automated(image_path, active_canisters,
     return result
 
 def process_two_views(front_path: str, back_path: str):
-    ...
+    """
+    Process both camera views and return combined canister inspection results.
+    
+    Returns:
+        dict: {'c1': int, 'c2': int, 'c3': int, 'c4': int}
+              where 1 = needs recorrection, 0 = level/OK
+    """
     base_dir = os.path.dirname(front_path) or "."
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     debug_root = os.path.join(base_dir, f"debug_{ts}")
@@ -414,6 +420,7 @@ def process_two_views(front_path: str, back_path: str):
 
     print(f"[AUTO DETECT] Debug output directory: {debug_root}")
 
+    # Process front view (C3, C4)
     flags_front = process_containers_automated(
         front_path,
         active_canisters=[3, 4],
@@ -422,6 +429,7 @@ def process_two_views(front_path: str, back_path: str):
         debug_dir=front_debug_dir,
     )
 
+    # Process back view (C1, C2)
     flags_back = process_containers_automated(
         back_path,
         active_canisters=[1, 2],
@@ -429,8 +437,19 @@ def process_two_views(front_path: str, back_path: str):
         save_debug=True,
         debug_dir=back_debug_dir,
     )
-    ...
-
+    
+    # Combine results and convert to expected format
+    # process_containers_automated returns {'c1_recorrect': bool/None, ...}
+    # We need to return {'c1': int, 'c2': int, 'c3': int, 'c4': int}
+    results = {
+        'c1': 1 if flags_back.get('c1_recorrect') else 0,
+        'c2': 1 if flags_back.get('c2_recorrect') else 0,
+        'c3': 1 if flags_front.get('c3_recorrect') else 0,
+        'c4': 1 if flags_front.get('c4_recorrect') else 0,
+    }
+    
+    print(f"[AUTO DETECT] Combined results: {results}")
+    return results
 # --------------------------- Logic loop --------------------------------------
 
 def inspection_loop():
