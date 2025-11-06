@@ -260,7 +260,8 @@ def inspection_loop():
             print(f"\n[CAMERA] New inspection requested. ID = {inspection_id}\n")
             
             # Clear trigger
-            _ir_set(MM_RECEIVED_INSTRUCTION_ADDR, [0])
+            # _ir_set(MM_RECEIVED_INSTRUCTION_ADDR, [0])
+            _hr_set(MM_RECEIVED_INSTRUCTION_ADDR, [0]) # Technically better and should be used after confirmation
             
         # First view: Start capturing front photo
         photo_ready_step = read_photo_ready_step()
@@ -298,8 +299,11 @@ def inspection_loop():
             # Start async capture
             back_capture = take_photo_async("Second View", inspection_id)
         
+        photo_ready_step = read_photo_ready_step()  # Re-read before processing
+
         # Check if back capture is complete, then process
-        if back_capture is not None and back_capture['done'] and photo_step_done == 1:
+        if (back_capture is not None and back_capture['done'] and 
+            photo_step_done == 1 and photo_ready_step == 2):  # ADD THIS
             back_image_path = back_capture['path']
             
             # Process all 4 containers using both images
@@ -329,6 +333,7 @@ def inspection_loop():
             
             # Reset for next inspection
             back_capture = None
+            front_capture = None
 
         # 10 Hz loop rate
         time.sleep(0.1)
