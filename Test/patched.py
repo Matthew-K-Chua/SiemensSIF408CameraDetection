@@ -244,6 +244,7 @@ def process_pallet(image, active_canisters, crop_regions=None,
     """
     Process specific canisters from a single camera view.
     Uses relative crop regions tuned for 4608x2592 reference images.
+    Also saves cropped and line-detected images if debug_dir provided.
     """
 
     height, width = image.shape[:2]
@@ -254,7 +255,7 @@ def process_pallet(image, active_canisters, crop_regions=None,
         y1 = int(height * 0.42)
         y2 = int(height * 0.55)
 
-        # Horizontal positions
+        # Horizontal positions (same as your working script)
         left_x1, left_x2 = int(width * 0.35), int(width * 0.51)
         right_x1, right_x2 = int(width * 0.55), int(width * 0.71)
 
@@ -273,6 +274,10 @@ def process_pallet(image, active_canisters, crop_regions=None,
 
     canister_status = {}
 
+    # Ensure debug directory exists
+    if debug_dir:
+        os.makedirs(debug_dir, exist_ok=True)
+
     for canister_id in active_canisters:
         if canister_id not in crop_regions:
             print(f"[AUTO DETECT] Warning: No crop region defined for canister {canister_id}")
@@ -281,15 +286,24 @@ def process_pallet(image, active_canisters, crop_regions=None,
         y1, y2, x1, x2 = crop_regions[canister_id]
         canister_crop = image[y1:y2, x1:x2]
 
-        debug_path = None
+        # Prepare debug paths
+        crop_path = None
+        lines_path = None
         if debug_dir:
-            debug_path = os.path.join(debug_dir, f"canister_{canister_id}_lines.jpg")
+            crop_path = os.path.join(debug_dir, f"canister_{canister_id}_crop.jpg")
+            lines_path = os.path.join(debug_dir, f"canister_{canister_id}_lines.jpg")
 
+        # Save the cropped image before detection
+        if crop_path:
+            cv2.imwrite(crop_path, canister_crop)
+            print(f"[AUTO DETECT] Saved cropped image: {crop_path}")
+
+        # Run detection (and also save lines overlay)
         status = detect_canister_level(
             canister_crop,
             canister_id,
             save_debug=(debug_dir is not None),
-            debug_path=debug_path
+            debug_path=lines_path
         )
         canister_status[canister_id] = status
 
