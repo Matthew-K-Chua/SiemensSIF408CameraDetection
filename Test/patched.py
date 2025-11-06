@@ -252,12 +252,12 @@ def process_pallet(image, active_canisters, crop_regions=None,
     # Default crop regions if none passed
     if crop_regions is None:
         # Vertical band for all crops (middle section)
-        y1 = int(height * 0.42)
+        y1 = int(height * 0.40)
         y2 = int(height * 0.55)
 
         # Horizontal positions
-        left_x1, left_x2 = int(width * 0.35), int(width * 0.51)
-        right_x1, right_x2 = int(width * 0.55), int(width * 0.71)
+        left_x1, left_x2 = int(width * 0.20), int(width * 0.50)
+        right_x1, right_x2 = int(width * 0.60), int(width * 0.90)
 
         if camera_side == 'front':
             # Front view shows: C3 (left), C4 (right)
