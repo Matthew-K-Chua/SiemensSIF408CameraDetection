@@ -39,6 +39,8 @@ import sys
 import time
 import logging
 import threading
+import cv2
+import numpy as np
 from datetime import datetime
 from typing import Dict, Any
 
@@ -161,12 +163,256 @@ def take_photo_async(kind: str, inspection_id: int) -> Dict[str, Any]:
     return result
 
 # --------------------------- Processing hook ---------------------------------
+# Integrated from imgDetection.py
+
+def detect_canister_level(canister_img, canister_id, angle_tolerance=2.0,
+                          save_debug=False, debug_path=None):
+    """
+    Detect if a canister is level by analysing the top horizontal line.
+    Returns a status dict for that canister.
+    """
+    status = {
+        'id': canister_id,
+        'is_level': True,
+        'angle': 0.0,
+        'has_top_line': False,
+        'is_curved': False
+    }
+
+    grey_image = cv2.cvtColor(canister_img, cv2.COLOR_BGR2GRAY)
+    blur_image = cv2.medianBlur(grey_image, 11)
+    canny_image = cv2.Canny(blur_image, 300, 400)
+
+    lines = cv2.HoughLinesP(
+        canny_image,
+        rho=1,
+        theta=np.pi / 180,
+        threshold=30,
+        minLineLength=40,
+        maxLineGap=5
+    )
+
+    if lines is None:
+        return status
+
+    status['has_top_line'] = True
+
+    horizontal_angles = []
+    debug_img = canister_img.copy()
+
+    for line in lines:
+        x1, y1, x2, y2 = line[0]
+        cv2.line(debug_img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+
+        dx = x2 - x1
+        dy = y2 - y1
+
+        if dx == 0:
+            continue
+
+        angle = np.degrees(np.arctan2(dy, dx))
+
+        # Only treat reasonably horizontal-ish segments
+        if abs(angle) < 45:
+            horizontal_angles.append(angle)
+
+    # Save debug image if requested
+    if save_debug and debug_path:
+        cv2.imwrite(debug_path, debug_img)
+        print(f"[AUTO DETECT] Debug image saved: {debug_path}")
+
+    if not horizontal_angles:
+        status['has_top_line'] = False
+        return status
+
+    angle_std = np.std(horizontal_angles)
+    if angle_std > 5.0:
+        # Lots of variation → likely curved
+        status['is_curved'] = True
+        status['is_level'] = False
+        status['angle'] = float(np.mean(horizontal_angles))
+    else:
+        avg_angle = float(np.mean(horizontal_angles))
+        status['angle'] = avg_angle
+        status['is_level'] = abs(avg_angle) < angle_tolerance
+
+    return status
+
+
+def process_pallet(image, active_canisters, crop_regions=None,
+                   camera_side='front', debug_dir=None):
+    """
+    Process specific canisters from a single camera view.
+    Uses relative crop regions tuned for 4608x2592 reference images.
+    """
+
+    height, width = image.shape[:2]
+
+    # Default crop regions if none passed
+    if crop_regions is None:
+        # Vertical band for all crops (middle section)
+        y1 = int(height * 0.42)
+        y2 = int(height * 0.55)
+
+        # Horizontal positions
+        left_x1, left_x2 = int(width * 0.35), int(width * 0.51)
+        right_x1, right_x2 = int(width * 0.55), int(width * 0.71)
+
+        if camera_side == 'front':
+            # Front view shows: C3 (left), C4 (right)
+            crop_regions = {
+                3: [y1, y2, left_x1, left_x2],
+                4: [y1, y2, right_x1, right_x2],
+            }
+        else:
+            # Back view shows: C1 (left), C2 (right)
+            crop_regions = {
+                1: [y1, y2, left_x1, left_x2],
+                2: [y1, y2, right_x1, right_x2],
+            }
+
+    canister_status = {}
+
+    for canister_id in active_canisters:
+        if canister_id not in crop_regions:
+            print(f"[AUTO DETECT] Warning: No crop region defined for canister {canister_id}")
+            continue
+
+        y1, y2, x1, x2 = crop_regions[canister_id]
+        canister_crop = image[y1:y2, x1:x2]
+
+        debug_path = None
+        if debug_dir:
+            debug_path = os.path.join(debug_dir, f"canister_{canister_id}_lines.jpg")
+
+        status = detect_canister_level(
+            canister_crop,
+            canister_id,
+            save_debug=(debug_dir is not None),
+            debug_path=debug_path
+        )
+        canister_status[canister_id] = status
+
+        level_str = "LEVEL" if status['is_level'] else "OFF KILTER"
+        if status['has_top_line']:
+            if status['is_curved']:
+                print(f"[AUTO DETECT] Canister {canister_id}: {level_str} - CURVED")
+            else:
+                print(f"[AUTO DETECT] Canister {canister_id}: {level_str} - Angle: {status['angle']:.2f}°")
+        else:
+            print(f"[AUTO DETECT] Canister {canister_id}: No top line detected - assuming LEVEL")
+
+    return canister_status
+
+
+def get_recorrection_flags_from_dict(canister_status):
+    """
+    Convert canister status dict to recorrection flags.
+
+    Returns:
+        dict: {'c1_recorrect': bool/None, 'c2_recorrect': bool/None, ...}
+              None indicates canister was not processed.
+    """
+    result = {
+        'c1_recorrect': None,
+        'c2_recorrect': None,
+        'c3_recorrect': None,
+        'c4_recorrect': None,
+    }
+
+    for canister_id, status in canister_status.items():
+        key = f'c{canister_id}_recorrect'
+        # True if NOT level (needs recorrection)
+        result[key] = not status['is_level']
+
+    return result
+
+
+def process_containers_automated(image_path, active_canisters,
+                                 crop_regions=None, camera_side='front',
+                                 save_debug=False):
+    """
+    Automated container inspection for specific canisters.
+    Returns: {'c1_recorrect': bool/None, ...}
+    """
+    canister_str = ", ".join([f"C{i}" for i in sorted(active_canisters)])
+    print(f"\n[AUTO DETECT] Processing canisters: {canister_str}")
+    print(f"[AUTO DETECT] Loading image: {image_path}")
+
+    image = cv2.imread(image_path)
+
+    if image is None:
+        print(f"[AUTO DETECT] ERROR: Failed to load image. Defaulting all to OK.")
+        return {
+            'c1_recorrect': None,
+            'c2_recorrect': None,
+            'c3_recorrect': None,
+            'c4_recorrect': None,
+        }
+
+    debug_dir = os.path.dirname(image_path) if save_debug else None
+
+    canister_status = process_pallet(
+        image,
+        active_canisters,
+        crop_regions=crop_regions,
+        camera_side=camera_side,
+        debug_dir=debug_dir
+    )
+
+    result = get_recorrection_flags_from_dict(canister_status)
+
+    print(f"[AUTO DETECT] Results: ", end="")
+    for i in sorted(active_canisters):
+        key = f'c{i}_recorrect'
+        print(f"{key}={result[key]} ", end="")
+    print("\n")
+
+    return result
+
 
 def process_two_views(front_path: str, back_path: str):
     """
-    TODO: replace with your real CV. Must return dict keys: c1,c2,c3,c4 with 0/1 values.
+    Run CV on front & back images and return dict:
+        {'c1': 0/1, 'c2': 0/1, 'c3': 0/1, 'c4': 0/1}
+
+    Here we interpret:
+      1 = needs recorrection (NOT level)
+      0 = OK (level) or not processed
     """
-    return {"c1": 0, "c2": 0, "c3": 0, "c4": 0}
+
+    # Front camera sees: C3 (left), C4 (right)
+    flags_front = process_containers_automated(
+        front_path,
+        active_canisters=[3, 4],
+        camera_side='front',
+        save_debug=False  # set True if you want line overlay images
+    )
+
+    # Back camera sees: C1 (left), C2 (right)
+    flags_back = process_containers_automated(
+        back_path,
+        active_canisters=[1, 2],
+        camera_side='back',
+        save_debug=False
+    )
+
+    combined = {**flags_front, **flags_back}
+
+    # Convert booleans/None into 0/1 ints for Modbus
+    out = {}
+    for cid in (1, 2, 3, 4):
+        key = f'c{cid}_recorrect'
+        val = combined.get(key)
+        if val is None:
+            # Not processed → treat as OK
+            out[f'c{cid}'] = 0
+        else:
+            out[f'c{cid}'] = 1 if val else 0
+
+    print(f"[AUTO DETECT] Final recorrection flags (c1..c4): {out}")
+    return out
+
 
 # --------------------------- Logic loop --------------------------------------
 
